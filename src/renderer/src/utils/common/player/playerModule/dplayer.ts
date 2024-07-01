@@ -1,10 +1,12 @@
 import DPlayer from 'dplayer';
 
-import { publicIcons, publicStream } from './components';
+import { publicIcons, publicStream, publicStorage } from './components';
 
 const publicListener = {
   timeUpdate: null as any,
   sendDanmu: null as any,
+  playrateUpdate: null as any,
+  volumeUpdate: null as any,
 };
 
 const options = {
@@ -17,38 +19,35 @@ const options = {
     type: '',
     customType: {
       customHls: (video: HTMLVideoElement, dp: DPlayer) => {
+        if (dp.hls) publicStream.destroy.customHls(dp);
         const hls = publicStream.create.customHls(video, video.src);
         dp.hls = hls;
         dp.on('destroy', () => {
-          hls!.destroy();
-          delete dp.hls;
+          publicStream.destroy.customHls(dp);
         });
       },
       customFlv: (video: HTMLVideoElement, dp: DPlayer) => {
-        if (dp.flv) dp.flv.destroy();
+        if (dp.flv) publicStream.destroy.customFlv(dp);
         const flv = publicStream.create.customFlv(video, video.src);
         dp.flv = flv;
         dp.on('destroy', () => {
-          flv.destroy();
-          delete dp.flv;
+          publicStream.destroy.customFlv(dp);
         });
       },
       customDash: (video: HTMLVideoElement, dp: DPlayer) => {
-        if (dp.mpd) dp.mpd.destroy();
+        if (dp.mpd) publicStream.destroy.customDash(dp);
         const mpd = publicStream.create.customDash(video, video.src);
         dp.mpd = mpd;
         dp.on('destroy', () => {
-          mpd.destroy();
-          delete dp.mpd;
+          publicStream.destroy.customDash(dp);
         });
       },
       customWebTorrent: (video: HTMLVideoElement, dp: DPlayer) => {
-        if (dp.torrent) dp.torrent.destroy();
+        if (dp.torrent) publicStream.destroy.customTorrent(dp);
         const torrent = publicStream.create.customTorrent(video, video.src);
         dp.torrent = torrent;
         dp.on('destroy', () => {
-          // torrent.remove(video.src);
-          torrent.destroy();
+          publicStream.destroy.customTorrent(dp);
         });
       },
     },
@@ -63,9 +62,27 @@ const options = {
   },
 };
 
+const instances: any[] = [];
 class CustomDPlayer extends DPlayer {
   constructor(options) {
     super(options); // 调用DPlayer构造函数初始化实例
+    instances.push(this);
+  }
+
+  destroy() {
+    const self: any = this;
+    instances.splice(instances.indexOf(self), 1);
+    self.pause();
+    document.removeEventListener('click', self.docClickFun, true);
+    self.container.removeEventListener('click', self.containerClickFun, true);
+    self.fullScreen.destroy();
+    self.hotkey.destroy();
+    self.contextmenu.destroy();
+    self.controller.destroy();
+    self.timer.destroy();
+    // self.video.src = ''; // 此行代码会引起始终触发倍速为1
+    self.container.innerHTML = '';
+    self.events.trigger('destroy');
   }
 
   /**
@@ -74,10 +91,10 @@ class CustomDPlayer extends DPlayer {
    * 如果提供了回调函数，则仅移除与之匹配的监听器。
    *
    * @param {string} name - 事件名称。
-   * @param {Function|undefined} [callback] - 要移除的事件处理函数。默认为undefined，表示移除所有同名事件监听器。
+   * @param {Function} [callback] - 要移除的事件处理函数。
    * @returns {CustomDPlayer} 返回当前实例，支持链式调用。
    */
-  off(name: string, callback: Function | undefined = undefined) {
+  off(name: string, callback?: Function) {
     // @ts-ignore 获取或初始化events.events对象, 用于存储事件监听器
     const e = this.events.events || (this.events.events = {});
     // 获取特定事件名称下的所有监听器
@@ -105,6 +122,27 @@ class CustomDPlayer extends DPlayer {
     }
 
     // 返回当前实例，便于链式调用
+    return this;
+  }
+
+  /**
+   * 扩展的once方法，用于监听单次事件监听器。
+   *
+   * @param {string} name - 事件名称。
+   * @param {Function} [callback] - 要监听单次的事件处理函数。
+   * @returns {CustomDPlayer} 返回当前实例，支持链式调用。
+   */
+  once(name: string, callback?: Function) {
+    const self = this;
+    function listener(...args) {
+      setTimeout(() => {
+        self.off(name, listener);
+      }, 0); // 必须上定时器，不然报错
+      if (callback) callback.apply(self, args);
+    }
+
+    // @ts-ignore
+    self.events.on(name, listener);
     return this;
   }
 }
@@ -141,6 +179,8 @@ const create = (options: any): any => {
   }
 
   const player: any = new CustomDPlayer({ ...options });
+  player.storage = new publicStorage('dplayer_settings');
+
   // 元素替换，原生太丑
   elementDeal.replace('.dplayer-comment-icon', publicIcons.danmu);
   elementDeal.replace('.dplayer-setting-icon', publicIcons.setting);
@@ -202,6 +242,21 @@ const create = (options: any): any => {
   if (pipButton) pipButton.addEventListener('click', handlePipClick);
   const danmuButton = document.querySelector('.dplayer-subtitle-icon');
   if (danmuButton) danmuButton.addEventListener('click', handleDanmuClick);
+
+  player.once('canplay', () => {
+    if (!options.live) player.speed(player.storage.get('playrate') || 1);
+  });
+
+  publicListener.playrateUpdate = () => {
+    player.storage.set('playrate', player.video.playbackRate);
+  };
+  player.on('ratechange', publicListener.playrateUpdate);
+
+  publicListener.volumeUpdate = () => {
+    player.storage.set('volume', player.video.volume);
+  };
+  player.on('volumechange', publicListener.volumeUpdate);
+
   return player;
 };
 
@@ -227,9 +282,12 @@ const play = (player: DPlayer) => {
 
 const playNext = (player: DPlayer, options: any) => {
   const { playbackRate } = player.video;
+  if (options.type === 'customFlv') {
+    publicStream.destroy.customFlv(player);
+  } // 重要
   player.switchVideo({ ...options });
   player.options.video.url = options.url;
-  player.danmaku.clear();
+  if (player?.danmaku) player.danmaku.clear();
   if (playbackRate !== 1) player.speed(playbackRate);
   player.play();
 };

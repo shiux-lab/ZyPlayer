@@ -6,6 +6,7 @@ import { publicBarrageSend, publicColor, publicIcons, publicStream } from './com
 const publicListener = {
   timeUpdate: null as any,
   sendDanmu: null as any,
+  playrateUpdate: null as any,
 };
 
 const options: any = {
@@ -21,6 +22,7 @@ const options: any = {
   flip: true,
   hotkey: true,
   isLive: false,
+  aspectRatio: true,
   plugins: [
     artplayerPluginDanmuku({
       speed: 5,
@@ -43,46 +45,41 @@ const options: any = {
   customType: {
     customHls: (video: HTMLVideoElement, url: string, art: Artplayer) => {
       art.loading.show = true;
-      if (art.hls) art.hls.destroy();
+      if (art.hls) publicStream.destroy.customHls(art);
       const hls = publicStream.create.customHls(video, url);
       art.hls = hls;
       art.on('destroy', () => {
-        hls!.destroy();
-        delete art.hls;
+        publicStream.destroy.customHls(art);
       });
       art.loading.show = false;
     },
     customFlv: (video: HTMLVideoElement, url: string, art: Artplayer) => {
       art.loading.show = true;
-      if (art.flv) art.flv.destroy();
+      if (art.flv) publicStream.destroy.customFlv(art);
       const flv = publicStream.create.customFlv(video, url);
       art.flv = flv;
       art.on('destroy', () => {
-        flv.destroy();
-        delete art.flv;
+        publicStream.destroy.customFlv(art);
       });
       art.loading.show = false;
     },
     customDash: (video: HTMLVideoElement, url: string, art: Artplayer) => {
       art.loading.show = true;
-      if (art.mpd) art.mpd.destroy();
+      if (art.mpd) publicStream.destroy.customDash(art);
       const mpd = publicStream.create.customDash(video, url);
       art.mpd = mpd;
       art.on('destroy', () => {
-        mpd.destroy();
-        delete art.mpd;
+        publicStream.destroy.customDash(art);
       });
       art.loading.show = false;
     },
     customWebTorrent: (video: HTMLVideoElement, url: string, art: Artplayer) => {
       art.loading.show = true;
-      if (art.torrent) art.torrent.destroy();
+      if (art.torrent) publicStream.destroy.customTorrent(art);
       const torrent = publicStream.create.customTorrent(video, url);
       art.torrent = torrent;
       art.on('destroy', () => {
-        // torrent.remove(url);
-        torrent.destroy();
-        delete art.torrent;
+        publicStream.destroy.customTorrent(art);
       });
       art.loading.show = false;
     },
@@ -114,7 +111,19 @@ const create = (options: any): Artplayer => {
   }
 
   Artplayer.PLAYBACK_RATE = [0.5, 0.75, 1, 1.25, 1.5, 2];
-  return new Artplayer({ ...options });
+
+  const player = new Artplayer({ ...options });
+
+  player.once('ready', () => {
+    if (!options.isLive) player.playbackRate = player.storage.get('playrate') || 1;
+  });
+
+  publicListener.playrateUpdate = () => {
+    player.storage.set('playrate', player.playbackRate);
+  };
+  player.on('video:ratechange', publicListener.playrateUpdate);
+
+  return player;
 };
 
 const currentTime = (player: Artplayer): number => {
@@ -140,10 +149,12 @@ const play = (player: Artplayer) => {
 const playNext = (player: Artplayer, options: any) => {
   // player.switch = options.url;
   player.switchUrl(options.url);
-  player.plugins.artplayerPluginDanmuku.config({
-    danmuku: [],
-  });
-  player.plugins.artplayerPluginDanmuku.load();
+  if (player.plugins?.artplayerPluginDanmuku) {
+    player.plugins.artplayerPluginDanmuku.config({
+      danmuku: [],
+    });
+    player.plugins.artplayerPluginDanmuku.load();
+  }
 };
 
 const seek = (player: Artplayer, time: number) => {
@@ -178,6 +189,12 @@ const offTimeUpdate = (player: Artplayer) => {
   player.off('video:timeupdate', publicListener.timeUpdate!);
 };
 
+const speed = (player: Artplayer, speed: number) => {
+  player.once('ready', () => {
+    player.playbackRate = speed;
+  });
+};
+
 const toggle = (player: Artplayer) => {
   player.toggle();
 };
@@ -197,6 +214,7 @@ export {
   play,
   playNext,
   seek,
+  speed,
   time,
   onTimeUpdate,
   offBarrage,
